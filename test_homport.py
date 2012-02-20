@@ -43,30 +43,60 @@ class NodeWrapTestCase(unittest.TestCase):
         self.assert_(subnet.inputConnectors()[1])
 
 
-class ParmWrapTestCase(unittest.TestCase):
+class TestParmTupleWrap(object):
+
     def setUp(self):
         self.geo1 = hou.node('/obj').createNode('geo')
         self.geo2 = hou.node('/obj').createNode('geo')
 
-    def testParmsWrapped(self):
-        self.assertEquals(self.geo1.tx.parm, self.geo1.node.parm('tx'))
+    def testGetParent(self):
+        assert_equal(-self.geo1.t, self.geo1)
+
+    def testSetParm(self):
+        self.geo1.t = (500, 0, 0)
+        assert_equal(self.geo1.t.eval(), (500.0, 0.0, 0.0))
+
+    def testEvalParm(self):
+        self.geo1.t.set((500, 0, 0))
+        assert_equal(self.geo1.t.eval(), (500.0, 0.0, 0.0))
+
+    def testStrParm(self):
+        self.geo1.t.set((500, 0, 0))
+        assert_equal(str(self.geo1.t), str((500.0, 0.0, 0.0)))
+
+    def testLinkParms(self):
+        self.geo1.t >> self.geo2.t
+        self.geo1.t = (500, 0, 0)
+        assert_equal(str(self.geo1.t), str(self.geo2.t))
+
+
+class TestParmWrap(object):
+
+    def setUp(self):
+        self.geo1 = hou.node('/obj').createNode('geo')
+        self.geo2 = hou.node('/obj').createNode('geo')
+
+    def testGetParent(self):
+        assert_equal(-self.geo1.tx, self.geo1)
 
     def testSetParm(self):
         self.geo1.tx = 500
-        self.assertEquals(self.geo1.tx.eval(), 500)
+        assert_equal(self.geo1.tx.eval(), 500)
 
     def testEvalParm(self):
         self.geo1.tx.set(500.0)
-        self.assertEquals(self.geo1.tx.eval(), 500.0)
+        assert_equal(self.geo1.tx.eval(), 500.0)
 
     def testStrParm(self):
         self.geo1.tx.set(500.0)
-        self.assertEquals(str(self.geo1.tx), str(500.0))
+        assert_equal(str(self.geo1.tx), str(500.0))
 
     def testLinkParms(self):
         self.geo1.tx >> self.geo2.tx
         self.geo1.tx = 450.0
-        self.assertEquals(str(self.geo1.tx), str(self.geo2.tx))
+        assert_equal(str(self.geo1.tx), str(self.geo2.tx))
+
+
 
 if __name__ == "__main__":
     unittest.main()

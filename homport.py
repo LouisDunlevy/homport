@@ -1,517 +1,348 @@
-"""
-Homport is a helper module to make manipulating nodes with HOM easier in
-an interactive Python session
+import hou
+# we import this module for the _addMethod function. very cool.
+import houpythonportion as addToHom
 
-Connect nodes quickly:
-node >> node2 -- connects output of 'node' to first input of 'node2'
-node >> node2.input_two -- connects output of 'node' to the second input of
-                           'node2'
 
-Deal with parameters more easily:
-print node.tx does the same as:
-print node.parm('tx').eval()
-
-Installation Instructions:
-    You will be able to use pip to install it (when I get around to it):
-    pip install git://github.com/schworer/homport homport/
-
-    If you don't want to use pip, clone the repo and add it to your path
-    manually:
-    git clone git://github.com/schworer/homport homport/
-
-    Then, put this in your 123.py or 456.py Houdini startup script:
-        import homport
-        homport.on()
-    or, import it directly in the Python pane within Houdini.
-"""
-
-if not 'hou' in globals():
-    # import houdini in this module. Ideally, hou should already be in
-    # globals, as homport is meant to be run inside a houdini session.
-    import hou
-
-def on():
+def getIdx(node):
     """
-    initialize the current session node wrapper.
-    @warning: This monkey patches the hou.node method.
+Get the set index. if there is no attribute _idx we asume you want
+input 0. (first connector) this means that if you changed the input 
+you will need to change it back to input_one ones you done with a 
+other connector.
     """
 
-    # move the original function out of the way, we'll call it later
-    if not hasattr(hou, "__node"):
-        
-        hou.__node = hou.node
-    
-        def _wrap_node(*args, **kwargs):
-            """
-            This function is used to monkey patch the hou.node method in order to
-            make the session module transparent to users. Once monkey patched,
-            hou.node will return a NodeWrap object.
-            """
-            node = hou.__node(*args, **kwargs)
-            return NodeWrap(node)
-    
-        _wrap_node.func_name = 'node'
-        _wrap_node.func_doc = hou.node.func_doc
-        hou.node = _wrap_node                
-            
+    idx = 0
+    # check if we have the attribute
+    if hasattr(node, "_idx") and node._idx:
+        idx = node._idx
 
-def off():
+    return idx
+
+
+@addToHom._addMethod(hou.Node)
+def __neg__(self):
     """
-    uninitialized the current session node wrapper.
-    @warning: remove the monkey patch
+return the parent of the current node.
+
+@warning: This currently will not evaluate correctly in the python shell because of the method
+of evaluation in the introspect module. (around line 30 there doing a eval and it's not returning
+the correct value)
+
+@attention: You have to store the evaluated object to be able to use it. doing something like.
+--myNode.name() Will produces a error where as node = --myNode; node.name() will work.
+    """
+    return self.parent()
+
+
+@addToHom._addMethod(hou.Node)
+def __getitem__(self, idx):
+    """ index start at 1 to the max amount of inputs. """
+    # make sure the passed index is a integer
+    if isinstance(idx, int):
+        self._idx = idx
+
+    # return the same node with the new internal value
+    return self
+
+
+@addToHom._addMethod(hou.Node)
+def __getattr__(self, name):
+    """
+__getattr__(self, name) -> hou.Node, hou.Parm or hou.ParmTuple
+
+ Easily get the children or parameters of the node without calling
+extra methods on the node. A useful convenience function.
+Examples:
+    node = hou.node('/obj')
+    node.geo1 # will return hou.node('/obj/geo1')
+    node.tx # will return node.parm('tx')
     """
 
+    # Check and see if we can find a child node with that name
+    childNode = self.node(name)
+    # Check and see if there is a parm with that name.
+    parm = self.parm(name)
+    parmTuple = None
+    # if there is no parm with that name we check for a parm tuple.
+    if not parm:
+        parmTuple = self.parmTuple(name)
+
+    # if we find one in any of the 3 types we will return it.
+    attribs = [x for x in (childNode, parm, parmTuple) if x]
+    # if we have 0 or more then 1 we return with nothing.
+    if len(attribs) == 0 or len(attribs) > 1:
+        return
+        # otherwise we return the attribute.
+    return attribs[0]
+
+
+@addToHom._addMethod(hou.Node)
+def __setattr__(self, name, value):
+    """
+This implementation of setattr enables setting of parameters using the
+= (equals) operator. Usually, you'd set a parm value like this:
+    node.parm('tx').set(50)
+With this implementation, we can do this:
+    node.tx = 50
+
+For example, it should be obvious that this won't work:
+    my_tx = node.tx
+    my_tx = 50
+Or this:
+    tx = node.parm('tx')
+    tx = 50
+    """
+    # if where looking to set a attribute called _idx just set it on the node
+    if name == '_idx':
+        object.__setattr__(self, name, value)
+
+    else:
+        # try and find a attribute with the name.
+        attr = self.__getattr__(name)
+        # if we don't find anything just return
+        if not attr: return
+        # let's check and see if it's a hou.Parm or a hou.ParmTuple
+        if isinstance(attr, hou.Parm) or isinstance(attr, hou.ParmTuple):
+            # set the value on the parameter
+            attr.set(value)
+
+
+@addToHom._addMethod(hou.Node)
+def __rshift__(self, otherNode):
+    """
+connect node's output to node2's input
+node >> node2
+    """
+    # take the input number we want to connect to and
+    # connect the node it
+    otherNode.setInput(getIdx(otherNode), self)
+    otherNode._idx = 0
+
+
+@addToHom._addMethod(hou.Node)
+def __lshift__(self, otherNode):
+    """
+connect node's input to node2's output 
+node << node2
+    """
+    # take the input number we want to connect to and
+    # connect the other node
+    self.setInput(getIdx(self), otherNode)
+    self._idx = 0
+
+
+@addToHom._addMethod(hou.Node)
+def __floordiv__(self, otherNode):
+    """
+Disconnect two nodes:
+>>> node = hou.node('/obj/geo1')
+>>> node2 = hou.node('/obj/geo2')
+>>> node >> node2 # connect them
+>>> node // node2 # disconnect them
+    """
+    # check object's input connections
+    selectedIdx = None
+    # in the case of a node not having the requested inputs. will
+    # catch it and pass without a error.
     try:
-        
-        hou.node = hou.__node
-        del hou.__node
-        
-    except AttributeError:
-        
+        # get the input we want to disconnect from.
+        conn = otherNode.inputConnectors()[getIdx(otherNode)][0]
+        # if the input node from this output node is the same as the
+        # connected node (confusing i know). we can take the index to 
+        # do a disconnection on.
+        if conn.inputNode() == self:
+            selectedIdx = conn.inputIndex()
+
+        if selectedIdx != None:
+            # disconnect a index that we found.
+            otherNode.setInput(selectedIdx, None)
+    # incase the user tried to disconnect a input that's doesn't exists
+    except IndexError:
         pass
 
 
+@addToHom._addMethod(hou.Node)
+def ancestor(self, n):
+    """ Return n't of parent of the current node. """
+    p = self.node("../" * n)
+    return p
 
-class NodeWrapError(Exception):
-    
-    pass
+##==============================
+## Functions related to ParmTuple
+##==============================
 
-    
-
-class NodeWrap(object):
+@addToHom._addMethod(hou.ParmTuple)
+def __neg__(self):
     """
-        Wrapper of the hou.Node Object. this will be avaliable on any node after the application of the
-        bootstrap function. this will add additional features to the hou.Node object for simpler interaction.
-        
+__neg__(self)
+
+return the node of the current ParmTuple.
+
+@warning: This currently will not evaluate correctly in the python shell because of the method
+of evaluation in the introspect module. (around line 30 there doing a eval and it's not returning
+the correct value)
     """
-    def __init__(self, node):
-        """
-            stores the node into the wrapper function.
-            
-            @type node: hou.Node 
-            @param node: the houdini node to perform the operation on.
-         
-            @raise NodeWrapError: if the node is not a valid houdini node.
-
-        """
-        
-        if not node:
-        
-            raise NodeWrapError('Invalid node given.')
-
-        self.node = node
-        self._idx = 0
+    return self.node()
 
 
-    def createNode(self, name):
-        """
-        Wraps the node created by hou.Node.createNode in a NodeWrap obj
-        
-            @type name: str 
-            @param name: the node name we want to create.
-            
-            @rtype: str
-            @return: returns the NodeWrap of the new node.
-         
-        """
-        
-        node = self.node.createNode(name)
-        
-        return NodeWrap(node)
-
-
-    def __getattr__(self, name):
-        """
-            convenience function: allows users to return parms or subChildren
-            of the current node.
-            
-            examples:
-            
-            >>> node = hou.node('/obj')
-            >>> node.geo1
-            <Node /obj/geo1 of type geo>
-            >>> print node.geo1.tx
-            0.0
-        
-            @type name: str 
-            @param name: the node, function or parm we want to return.
-        
-            @rtype: hou.Parm or hou.Node
-            @return: return what matches the name parm.
-                
-            @raise AttributeError: if we can't find anything.
-                
-        """
-
-        inputs = ('input_one', 'input_two', 'input_three', 'input_four')
-        
-        if name in inputs:
-            
-            self._idx = inputs.index(name)
-            
-            return self
-
-        # if the attr we're looking for is a method on the hou.Node object
-        # return that first without going further.
-        # This might cause problems later, we'll see.
-        if name in dir(self.node):
-            
-            return getattr(self.node, name)
-
-        childNode = self.node.node(name)
-        
-        if childNode:
-            
-            childNode = NodeWrap(childNode)
-
-        parm = self.node.parm(name)
-        
-        parmTuple = None
-        
-        if parm:
-            
-            parm = ParmWrap(parm)
-        
-        # we we didn't find a parm we will look for a parmTuple. 
-        # houdini will return a parmtuple even on normal parms so we 
-        # need to excluded this bit if we found a normal parm initially.
-        else: 
-            
-            parmTuple = self.node.parmTuple(name)
-            
-            if parmTuple:
-            
-                parmTuple = ParmTupleWrap(parmTuple)
-
-        try:
-            
-            attribute = getattr(self.node, name)
-            
-        except AttributeError:
-            
-            attribute = None
-
-        # if we find one in any of the 4 types we will return it.
-
-        attribs = [x for x in (childNode, parm, parmTuple, attribute) if x]
-        
-        if len(attribs) == 0:
-            
-            msg = "Node object has no Node, parm, parmTuple or python attr called %s" \
-                % name
-                
-            raise AttributeError(msg)
-
-        # if we find more then one we raise a error.
-        if len(attribs) > 1:
-            
-            attribs = [a.name() for a in attribs]
-            msg = "%s is an ambiguous name, it could be one of %s" \
-                % (name, attribs)
-
-            raise AttributeError(msg)
-
-        return attribs[0]
-
-
-    def __setattr__(self, name, value):
-        """
-            This implementation of setattr enables setting of parameters using the
-            = (equals) operator. Usually, you'd set a parm value like this:
-                node.parm('tx').set(50)
-            With this implementation, we can do this:
-                node.tx = 50
-    
-            @warning: this only works when the attr in question is a ParmWrap 
-            object on a NodeWrap object and not a standalone hou.Parm or 
-            ParmWrap object.
-    
-            For example, it should be obvious that this won't work:
-                my_tx = node.tx
-                my_tx = 50
-            Or this:
-                tx = node.parm('tx')
-                tx = 50
-            
-            @type name: str 
-            @param name: the parm we want to set.
-
-            @type value: str,int,float 
-            @param value: the value we want to set the parm to.
-            
-        """
-        
-        if name in ('node', '_idx'):
-            
-            object.__setattr__(self, name, value)
-            
-        else:
-            
-            attr = self.__getattr__(name)
-            
-            if isinstance(attr, ParmWrap):
-                
-                attr.parm.set(value)
-                
-            else:
-                
-                object.__setattr__(self, attr, value)
-
-
-    def __rshift__(self, object):
-        """
-            connect node's output to node2's input
-            node >> node2
-
-            @type object: NodeWrap
-            @param object: NodeWrap instance of the houdini node.
-     
-            @raise NodeWrapError: if the we can't wrap the node type.
-            
-        """
-        if isinstance(object, NodeWrap):
-            
-            node = object
-            
-        else:
-            
-            try:
-                
-                node = NodeWrap(object)
-                
-            except NodeWrapError, e:
-                
-                raise NodeWrapError
-            
-        node.setInput(node._idx, self.node)
-        
-
-    def __lshift__(self, object):
-        """
-            connect node's input to node2's output 
-            node << node2
-                    
-            @type object: NodeWrap
-            @param object: NodeWrap instance of the houdini node.
-     
-            @raise NodeWrapError: if the we can't wrap the node type.
-            
-        """
-        if isinstance(object, NodeWrap):
-            
-            node = object
-            
-        else:
-            
-            try:
-                
-                node = NodeWrap(object)
-                
-            except NodeWrapError, e:
-                
-                raise NodeWrapError
-            
-        self.node.setInput(self._idx, node.node)
-
-
-    def __floordiv__(self, object):
-        """
-            Disconnect two nodes:
-            >>> node = hou.node('/obj/geo1')
-            >>> node2 = hou.node('/obj/geo2')
-            >>> node >> node2 # connect them
-            >>> node // node2 # disconnect them
-            
-            @type object: NodeWrap
-            @param object: NodeWrap instance of the houdini node.
-     
-            @raise NodeWrapError: if the we can't wrap the node type.
-             
-        """
-        # check object's input connections
-        node = object
-
-        if len(node.inputConnections()) <= node._idx:
-            
-            return
-        
-        conn = node.inputConnections()[node._idx]
-        
-        if not conn.inputNode() == self.node:
-            
-            raise NodeWrapError('Input node is incorrect')
-        
-        else:
-            
-            node.setInput(node._idx, None)
-
-
-    def __repr__(self):
-        """ returns a string representation of the houdini node asset. """
-        return "<Node %s of type %s>" % (self.node.path(), self.node.type().name())
-
-
-    def __str__(self):
-        """ calls through to the HOM Node's str function """
-        return str(self.node)
-
-
-
-class ParmTupleWrap(object):
+@addToHom._addMethod(hou.ParmTuple)
+def __rshift__(self, otherParmTuple):
     """
-        Houdini ParmTuple wrapper class. this will add functions such as
-        left and right shift on parmTuples to channel reference.
-        
+right shift function for houdini parm Tuples.
+allowing you to connect 2 parm tuples.
+
+node.t >> node2.t
     """
-    
-    
-    def __init__(self, parmTuple):
-        """
-            initialize the parmTuple type. we hold a reference of the parmTuple
-            this parmTuple wrapper is changing.
-            
-        """
-        self.parmTuple = parmTuple
+
+    # this will take 2 tuples and zip them together and perform 
+    # a __rshift__ between 2 parms. this allows us to link objects
+    # like "t" which consistent of tx, ty, tx with a other tuple.
+    map(hou.Parm.__rshift__, tuple(self), tuple(otherParmTuple))
 
 
-    def __rshift__(self, object):
-        """
-            right shift function for houdini parm Tuples.
-            allowing you to connect 2 parm tuples.
-            
-            node.t >> node2.t
-            
-        """
-        
-        for parmFrom , parmTo in zip(tuple(self.parmTuple), tuple(object.parmTuple)):
-            
-            ParmWrap(parmFrom) >> ParmWrap(parmTo) 
-
-
-    def __lshift__(self, object):
-        """ 
-            reverse of rshift.
-            node.ty << node2.tx
-        """
-        
-        raise NotImplementedError
-            
-
-    def __getattr__(self, name):
-        """
-            returns the function that we want to have from the stores self.parmTuple.
-            We do this do make integration with hou.Node transparent.
-            
-            @rtype: hou.Parm
-            @return: returns the underlying hou.Parm object from houdini.
-            
-            @raise AttributeError: if the function doesn't exists.
-        
-        """
-
-        if name in dir(self.parmTuple):
-            
-            return getattr(self.parmTuple, name)
-        
-        else:
-            
-            msg = 'ParmWrap object has no attribute %s' % name
-            
-            raise AttributeError(msg)
-
-
-    def __str__(self):
-        """
-            returns the string representation of the parm.
- 
-            @rtype: str
-            @return: returns the string representation of the parm.
-         
-        """
-        
-        return str(self.parmTuple.eval())
-    
-
-class ParmWrap(object):
+@addToHom._addMethod(hou.ParmTuple)
+def __str__(self):
     """
-        Houdini Parm wrapper class. this will add functions such as
-        left and right shift on parms to channel reference.
-        
+Returns the value of the parameter instead of the object reference.
+Thus, typing `print node.t` will return the value of the `hou.ParmTuple`.
     """
-    
-    def __init__(self, parm):
-        """
-            initialize the parm type. we hold a reference of the parm
-            this parm wrapper is changing.
-            
-        """
-        self.parm = parm
+    return str(self.eval())
 
 
-    def __rshift__(self, object):
-        """
-            right shift function for houdini parms.
-            allowing you to connect 2 parms.
-            
-            node.tx >> node2.ty
-            
-        """
-        
-        cur_node = self.parm.node()
-        to_node = object.node()
-        rel_path = cur_node.relativePathTo(to_node)
-        rel_reference = ""
-        
-        # see if the parm is a string. add the chs to the command.
-        if self.parm.parmTemplate().type().name() == "String":
-            
-            rel_reference += 'chs'
-            
+##==============================
+## Functions related to Parameters
+##==============================
+
+@addToHom._addMethod(hou.Parm)
+def __neg__(self):
+    """
+__neg__(self)
+
+return the node of the current parameter.
+
+@warning: This currently will not evaluate correctly in the python shell because of the method
+of evaluation in the introspect module. (around line 30 there doing a eval and it's not returning
+the correct value). 
+    """
+    return self.node()
+
+
+@addToHom._addMethod(hou.Parm)
+def __rshift__(self, otherParm):
+    """
+Uses the `>>` operator to connect the left side's __output__ to the
+right side's __input__.
+Example:
+    camera >> sphere
+
+is the same as calling: `sphere.setInput('0', camera)`
+    """
+
+    connectParms(self, otherParm)
+
+
+@addToHom._addMethod(hou.Parm)
+def __lshift__(self, otherParm):
+    """
+Uses the `<<` operator to connect the left side's __input__ to the
+right side's __output__.
+Example:
+camera << sphere
+
+is the same as calling: `camera.setInput('0', sphere)`
+    """
+    connectParms(otherParm, self)
+
+
+@addToHom._addMethod(hou.Parm)
+def __str__(self):
+    """
+Returns the value of the parameter instead of the object reference.
+Thus, typing `print node.tx` will return the value of the `hou.Parm`.
+    """
+    return str(self.eval())
+
+
+def connectParms(fromParm, toParm):
+    """
+Creates a reference between `from_parm` to `to_parm`. This method is
+used by `__lshift__` and `__rshift__` to enable quick referencing of
+`hou.Parm` objects.
+    """
+    # from the current parm return the node instance
+    cur_node = fromParm.node()
+    # same for the other node
+    to_node = toParm.node()
+    # we need to determine the relative path between the 2
+    rel_path = cur_node.relativePathTo(to_node)
+
+    # The expression function that gets called to evaluate the reference is
+    # different based on the target parameter's type:
+    #
+    # - `ch()` for floats, ints
+    # - `chs()` for generic strings
+    # - `chsop()` for node paths
+
+    parm_template = toParm.parmTemplate()
+    # if the other parm is a string type
+    if parm_template.type().name() == 'String':
+        # we want to check if it's a node reference.
+        # if so we need to changed the node expression to using chsop
+        if parm_template.stringType().name() == 'NodeReference':
+            expr_func = 'chsop'
         else:
+            expr_func = 'chs'
+    else:
+        expr_func = 'ch'
+        # create the expression
+    rel_reference = '%s("%s/%s")' % (expr_func, rel_path, toParm.name())
+    # If the expression is for `chs()` or `chsop()`, it needs to be wrapped
+    # with backticks: `` `chsop("foo")` ``
+    if expr_func.startswith('chs'):
+        rel_reference = '`' + rel_reference + '`'
+        fromParm.deleteAllKeyframes()
+        fromParm.set(rel_reference)
+    else:
+        # set the expression
+        fromParm.setExpression(rel_reference)
 
-            rel_reference += 'ch'
-        
-        rel_reference += '("%s/%s")' % (rel_path, object.name())
-        self.parm.setExpression(rel_reference)
-        
 
-    def __lshift__(self, object):
-        """ node.ty << node2.tx not implemented """
-        
-        raise NotImplementedError
+## Python introspection override to allow for nicer and more fluid typing
+import introspect
 
-
-    def __getattr__(self, name):
-        """
-            returns the function that we want to have from the stores self.parm.
-            We do this do make integration with hou.Node transparent.
-            
-            @rtype: hou.Parm
-            @return: returns the underlying hou.Parm object from houdini.
-            
-            @raise AttributeError: if the function doesn't exists.
-        
-        """
-
-        if name in dir(self.parm):
-            
-            return getattr(self.parm, name)
-        
+def getAutoCompleteList(command = '', locals = None, includeMagic = 1,
+                        includeSingle = 1, includeDouble = 1):
+    """
+Return list of auto-completion options for command.
+The list of options will be based on the locals namespace.
+    """
+    attributes = []
+    # Get the proper chunk of code from the command.
+    root = introspect.getRoot(command, terminator = '.')
+    try:
+        if locals is not None:
+            object = eval(root, locals)
         else:
-            
-            msg = 'ParmWrap object has no attribute %s' % name
-            
-            raise AttributeError(msg)
-        
-            
-    def __str__(self):
-        """
-            returns the string representation of the parm.
- 
-            @rtype: str
-            @return: returns the string representation of the parm.
-         
-        """
-        
-        return str(self.parm.eval())
+            object = eval(root)
+    except:
+        pass
+    else:
+        attributes = introspect.getAttributeNames(object, includeMagic,
+                                                  includeSingle, includeDouble)
+
+    def createlist(obj):
+        return [s.name() for s in obj if s.name() not in attributes]
+
+    if hasattr(object, "children"):
+        attributes.extend(createlist(object.children()))
+
+    if hasattr(object, "parms"):
+        attributes.extend(createlist(object.parms()))
+
+    if hasattr(object, "parmTuples"):
+        attributes.extend(createlist(object.parmTuples()))
+
+    return attributes
+
+introspect.getAutoCompleteList = getAutoCompleteList
 
