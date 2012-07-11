@@ -71,7 +71,7 @@ Examples:
     attribs = [x for x in (childNode, parm, parmTuple) if x]
     # if we have 0 or more then 1 we return with nothing.
     if len(attribs) == 0 or len(attribs) > 1:
-        return
+        raise AttributeError()
         # otherwise we return the attribute.
     return attribs[0]
 
@@ -158,11 +158,11 @@ Disconnect two nodes:
             otherNode.setInput(selectedIdx, None)
     # incase the user tried to disconnect a input that's doesn't exists
     except IndexError:
-        pass
+        raise IndexError("no input at this index")
 
 
 @addToHom._addMethod(hou.Node)
-def ancestor(self, n):
+def ancestor(self, n=1):
     """ Return n't of parent of the current node. """
     p = self.node("../" * n)
     return p
@@ -306,7 +306,6 @@ used by `__lshift__` and `__rshift__` to enable quick referencing of
         # set the expression
         fromParm.setExpression(rel_reference)
 
-
 ## Python introspection override to allow for nicer and more fluid typing
 import introspect
 
@@ -329,20 +328,18 @@ The list of options will be based on the locals namespace.
     else:
         attributes = introspect.getAttributeNames(object, includeMagic,
                                                   includeSingle, includeDouble)
+        def createlist(obj):
+            return [s.name() for s in obj if s.name() not in attributes]
 
-    def createlist(obj):
-        return [s.name() for s in obj if s.name() not in attributes]
+        if hasattr(object, "children"):
+            attributes.extend(createlist(object.children()))
 
-    if hasattr(object, "children"):
-        attributes.extend(createlist(object.children()))
+        if hasattr(object, "parms"):
+            attributes.extend(createlist(object.parms()))
 
-    if hasattr(object, "parms"):
-        attributes.extend(createlist(object.parms()))
-
-    if hasattr(object, "parmTuples"):
-        attributes.extend(createlist(object.parmTuples()))
+        if hasattr(object, "parmTuples"):
+            attributes.extend(createlist(object.parmTuples()))
 
     return attributes
 
 introspect.getAutoCompleteList = getAutoCompleteList
-
